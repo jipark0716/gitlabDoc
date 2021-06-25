@@ -3,6 +3,7 @@
 namespace App\Gitlab\Resources;
 
 use GuzzleHttp\Client as Guzzle;
+use App\Models\{Repository, RepositoryFile, RepositoryFileFunction, RepositoryFileFunctionParam, RepositoryFileFunctionThrow};
 
 class Project extends Resource {
 
@@ -49,12 +50,6 @@ class Project extends Resource {
         return $result;
     }
 
-    /**
-     *
-     *
-     *
-     *
-     */
     public function __get($key)
     {
         if ($key == 'php_files') {
@@ -74,14 +69,20 @@ class Project extends Resource {
     {
         $result = [];
         foreach ($this->php_files as $file) {
-            echo '_';
             $info = [];
             foreach (explode("\n", (string) $file->getContent()) as $row) {
                 if (!isset($info['namespace']) && str_starts_with($row, 'namespace ')) {
                     $info['namespace'] = str_replace(['namespace ', ';'], '', $row);
-                } elseif (!isset($info['class']) && str_starts_with($row, 'class ')) {
+                } elseif (!isset($info['class']) && preg_match('/^ *class|interface|trait|abstract /', $row)) {
+                    if (preg_match('/^ *abstract */', $row)) {
+                        $row = preg_replace('/^ *abstract */', '', $row);
+                        $info['abstract'] = true;
+                    }
                     $row = preg_replace('/ *{ */', '', $row);
-                    if (preg_match('/^ *(?<type>class|interface) (?<class>[a-zA-Z]{1,1000}).*extends (?<extend>[\\a-zA-Z]{1,1000})/', $row, $match)) {
+                    if (
+                        preg_match('/^ *(?<type>class|interface|trait) (?<class>[a-zA-Z]{1,1000}).*extends (?<extend>[\\a-zA-Z]{1,1000})/', $row, $match) ||
+                        preg_match('/^ *(?<type>class|interface|trait) (?<class>[a-zA-Z]{1,1000})/', $row, $match)
+                    ) {
                         $info['class'] = $match['class'];
                         $info['type'] = $match['type'];
                         if (isset($match['extend'])) {
@@ -101,6 +102,7 @@ class Project extends Resource {
                     'type' => $info['type'],
                     'extend' => $info['extend'] ?? null,
                     'implements' => $info['implement'] ?: null,
+                    'abstract' => $info['abstract'] ?? false,
                 ];
             }
         }
@@ -118,11 +120,14 @@ class Project extends Resource {
         foreach ($this->php_files as $file) {
             $inPhp = false;
             $rows = explode("\n", (string) $file->getContent());
-            $result[$file->path]['function'] = [];
+            $result[$file->path] = [
+                'function' => [],
+                'id' => $file->id,
+            ];
             for ($i = 0; $i < count($rows); $i++) {
                 if (preg_match('/(?<public>public|protected|private|) *(?<static>static|) *function (?<name>[a-zA-Z]{1,1000}) *\(/', $rows[$i], $matchF)) {
                     $tempIndex = $i - 1;
-                    $description = ['param' => []];
+                    $description = ['param' => [], 'throw' => [], 'return' => []];
                     if (preg_match('/\*\//', $rows[$tempIndex])) {
                         while (--$tempIndex >= 0) {
                             $row = $rows[$tempIndex];
@@ -143,6 +148,14 @@ class Project extends Resource {
                                     'type' => $match['type'],
                                     'comment' => preg_replace('/^ *\* *\@return (?<type>[a-zA-Z\\\]{1,1000}) */', '', $row),
                                 ];
+                            } elseif(
+                                preg_match('/^ *\* *\@throws (?<type>[a-zA-Z\\\]{1,1000})/', $row, $match) &&
+                                isset($match['type'])
+                            ) {
+                                $description['throw'][] = [
+                                    'type' => $match['type'],
+                                    'comment' => preg_replace('/^ *\* *\@throws (?<type>[a-zA-Z\\\]{1,1000}) */', '', $row),
+                                ];
                             } elseif (preg_match('/\/\*/', $row)) {
                                 break;
                             } elseif (preg_replace('/^ *\* */', '', $row) != '') {
@@ -155,7 +168,6 @@ class Project extends Resource {
 
                         }
                     }
-                    $result[$file->path] = isset($result[$file->path]) ? $result[$file->path] : [];
                     $result[$file->path]['function'][$matchF['name']] = array_merge($description, [
                         'public' => $matchF['public'] ?? 'default',
                         'static' => !!$matchF['static'],
@@ -173,7 +185,81 @@ class Project extends Resource {
      */
     public function getInfo()
     {
-        return $this->getFunctions();
-        $namespace = $this->getNameSpaces();
+        return array_merge_recursive(
+            $this->getNameSpaces(),
+            $this->getFunctions()
+        );
+    }
+
+    /**
+     * 수집한 문서 저장
+     *
+     * @return void
+     */
+    public function save()
+    {
+        $repository = Repository::find($this->id) ?? new Repository([
+            'id' => $this->id,
+        ]);
+        $repository->fill([
+            'namespace' => $this->path_with_namespace,
+            'root_url' => $this->web_url,
+            'readme_url' => $this->readme_url,
+            'name' => $this->name,
+        ])->save();
+
+        RepositoryFile::where([
+            'repository_id' => $this->id,
+        ])->delete();
+
+        foreach ($this->getInfo() as $name => $info) {
+            RepositoryFile::create([
+                'id' => $info['id'],
+                'repository_id' => $this->id,
+                'name' => $name,
+                'class' => $info['class'] ?? null,
+                'type' => $info['type'] ?? null,
+                'implements' => $info['implements'] ?? null,
+                'extend' => $info['extend'] ?? null,
+                'abstract' => $info['abstract'] ?? false,
+            ]);
+            RepositoryFileFunction::where([
+                'file_id' => $info['id'],
+            ])->delete();
+            RepositoryFileFunctionParam::where([
+                'file_id' => $info['id'],
+            ])->delete();
+            RepositoryFileFunctionThrow::where([
+                'file_id' => $info['id'],
+            ])->delete();
+            foreach ($info['function'] ?? [] as $functionName => $function) {
+                RepositoryFileFunction::create([
+                    'file_id' => $info['id'],
+                    'name' => $functionName,
+                    'return_type' => $function['return']['type'] ?? null,
+                    'return_comment' => $function['return']['comment'] ?? null,
+                    'comment' => $function['comment'] ?? null,
+                    'public' => $function['public'] ?? null,
+                    'static' => $function['static'] ?? null,
+                ]);
+                foreach ($function['param'] ?? [] as $param) {
+                    RepositoryFileFunctionParam::create([
+                        'file_id' => $info['id'],
+                        'function_name' => $functionName,
+                        'name' => $param['name'] ?? null,
+                        'type' => $param['type'] ?? null,
+                        'comment' => $param['comment'] ?? null,
+                    ]);
+                }
+                foreach ($function['throw'] ?? [] as $throw) {
+                    RepositoryFileFunctionThrow::create([
+                        'file_id' => $info['id'],
+                        'function_name' => $functionName,
+                        'type' => $throw['type'] ?? null,
+                        'comment' => $throw['comment'] ?? null,
+                    ]);
+                }
+            }
+        }
     }
 }

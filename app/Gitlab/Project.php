@@ -19,7 +19,7 @@ trait Project {
         if ($recache === false && \Cache::get($cacheKey)) {
             return \Cache::get($cacheKey);
         }
-        \Cache::forget($cacheKey.'_content');
+        \Cache::forget($cacheKey.'_files');
         $project = $this->getProjects([
             'id_after' => $id - 1,
             'id_before' => $id + 1,
@@ -76,7 +76,8 @@ trait Project {
     /**
      * 파일 컨텐츠
      *
-     * @param path
+     * @param int $projectId
+     * @param string $path
      * @return App\Gitlab\Resources\FileContent
      */
     public function getFileContent($projectId, $path)

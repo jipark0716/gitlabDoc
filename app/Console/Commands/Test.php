@@ -38,6 +38,6 @@ class Test extends Command
     public function handle()
     {
         $project = \Gitlab::getProject(192);
-        dd($project->getInfo());
+        $project->save();
     }
 }
