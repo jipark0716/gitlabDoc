@@ -86,11 +86,11 @@ class Project extends Resource {
                         $info['class'] = $match['class'];
                         $info['type'] = $match['type'];
                         if (isset($match['extend'])) {
-                            $info['extend'] = $file->findImport($match['extend']);
+                            $info['extend'] = $file->findImport($match['extend'], $info['namespace'] ?? null);
                         }
                         $info['implement'] = preg_replace('/^ *(?<type>class|interface) (?<class>[a-zA-Z]{1,1000}).*extends (?<extend>[a-zA-Z]{1,1000})|implements| |/', '', $row) ?? null;
                         if ($info['implement']) {
-                            $info['implement'] = $file->findImport($info['implement']);
+                            $info['implement'] = $file->findImport($info['implement'], $info['namespace'] ?? null);
                         }
                         break;
                     }
@@ -125,10 +125,10 @@ class Project extends Resource {
                 'id' => $file->id,
             ];
             for ($i = 0; $i < count($rows); $i++) {
-                if (preg_match('/(?<public>public|protected|private|) *(?<static>static|) *function (?<name>[a-zA-Z]{1,1000}) *\(/', $rows[$i], $matchF)) {
+                if (preg_match('/(?<public>public|protected|private|) *(?<static>static|) *function (?<name>[\_a-zA-Z]{1,1000}) *\(/', $rows[$i], $matchF)) {
                     $tempIndex = $i - 1;
                     $description = ['param' => [], 'throw' => [], 'return' => []];
-                    if (preg_match('/\*\//', $rows[$tempIndex])) {
+                    if (preg_match('/^ *\*\//', $rows[$tempIndex])) {
                         while (--$tempIndex >= 0) {
                             $row = $rows[$tempIndex];
                             if (
@@ -136,7 +136,7 @@ class Project extends Resource {
                                 isset($match['name']) && isset($match['type'])
                             ) {
                                 $description['param'][] = [
-                                    'type' => $match['type'],
+                                    'type' => preg_replace('/^\\\/', '', $match['type']),
                                     'name' => $match['name'],
                                     'comment' => preg_replace('/^ *\* *\@param  *(?<type>[a-zA-Z\\\]{1,1000})  *(?<name>[a-zA-Z\\$]{1,1000}) */', '', $row),
                                 ];
@@ -160,14 +160,14 @@ class Project extends Resource {
                                 break;
                             } elseif (preg_replace('/^ *\* */', '', $row) != '') {
                                 if (isset($description['comment'])) {
-                                    $description['comment'] .= "\n".preg_replace('/^ *\* */', '', $row);
+                                    $description['comment'] = preg_replace('/^ *\* */', '', $row)."\n".$description['comment'];
                                 } else {
                                     $description['comment'] = preg_replace('/^ *\* */', '', $row);
                                 }
                             }
-
                         }
                     }
+                    $description['param'] = array_reverse($description['param']);
                     $result[$file->path]['function'][$matchF['name']] = array_merge($description, [
                         'public' => $matchF['public'] ?? 'default',
                         'static' => !!$matchF['static'],

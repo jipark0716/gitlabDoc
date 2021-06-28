@@ -80,16 +80,20 @@ class File extends Resource {
      * class full path return
      *
      * @param string $class
+     * @param string $namespace
      * @return string
      */
-    public function findImport($class)
+    public function findImport($class, $namespace)
     {
-        if ($class == 'base') {
-            dd($class);
-        }
         if (str_starts_with("\\", $class)) {
             return str_replace("\\", '', $class);
         }
-        return $this->getImports()[$class] ?? $class;
+        if (isset($this->getImports()[$class])) {
+            return $this->getImports()[$class];
+        } elseif ($namespace) {
+            return $namespace.'\\'.$class;
+        } else {
+            return $class;
+        }
     }
 }

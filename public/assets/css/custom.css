@@ -1,0 +1,13 @@
+.left-side-menu {
+    top: 0;
+    padding: 0;
+    overflow-y: auto;
+}
+.content-page {
+    top: 0;
+    margin-top: 10px;
+    padding: 0;
+}
+.metismenu li>a {
+    padding: 5px 20px !important;
+}
